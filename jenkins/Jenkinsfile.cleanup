@@ -41,7 +41,11 @@ pipeline {
                     flux uninstall --silent || true
 
                     # 2. Delete the app (Deployment, Service/LoadBalancer, Namespace)
-                    kubectl delete -f k8s/ --ignore-not-found=true
+                    kubectl delete -f k8s/namespace.yaml --ignore-not-found=true
+                    kubectl delete -f k8s/service.yaml --ignore-not-found=true
+                    kubectl delete -f k8s/deployment.yaml --ignore-not-found=true
+                    
+                    
                 """
             }
         }
