@@ -1,0 +1,85 @@
+pipeline {
+    agent any
+
+    environment {
+        // ---- Central config (change here, applies everywhere) ----
+        AWS_REGION    = 'ap-south-1'
+        // Secrets pulled from Jenkins Credentials (Secret text), not hardcoded
+        AWS_ACCOUNT   = credentials('aws-account-id')
+        APP_NAME      = 'cloudpulse-app'
+        K8S_NAMESPACE = 'cloudpulse'
+        CLUSTER_NAME  = 'cloudpulse-cluster'
+        NOTIFY_EMAIL  = credentials('notify-email')
+
+        // ---- Derived values ----
+        ECR_REPO = "${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/${APP_NAME}"
+    }
+
+    options {
+        ansiColor('xterm')
+    }
+
+    stages {
+        stage('Confirm Cleanup') {
+            steps {
+                input message: "⚠️ Are you sure? this will delete:\n- Deployment\n- Service (LoadBalancer)\n- Namespace\n- ECR Images", 
+                      ok: 'Yes, Clean it up!'
+            }
+        }
+
+        stage('Configure kubectl') {
+            steps {
+                sh "aws eks update-kubeconfig --region ${AWS_REGION} --name ${CLUSTER_NAME}"
+            }
+        }
+
+        stage('Delete K8s Resources') {
+            steps {
+                sh """
+                    # 1. Uninstall Flux first — otherwise it self-heals and
+                    #    recreates the app right after we delete it.
+                    flux uninstall --silent || true
+
+                    # 2. Delete the app (Deployment, Service/LoadBalancer, Namespace)
+                    kubectl delete -f k8s/ --ignore-not-found=true
+                """
+            }
+        }
+
+        stage('Delete ECR Images') {
+            steps {
+                sh """
+                    # Fetch all image IDs in the ECR repository
+                    IMAGE_IDS=\$(aws ecr list-images \
+                        --region ${AWS_REGION} \
+                        --repository-name ${APP_NAME} \
+                        --query 'imageIds[*]' \
+                        --output json)
+                    
+                    if [ "\$IMAGE_IDS" != "[]" ]; then
+                        aws ecr batch-delete-image \
+                            --region ${AWS_REGION} \
+                            --repository-name ${APP_NAME} \
+                            --image-ids "\$IMAGE_IDS"
+                        echo "✅ ECR images deleted"
+                    else
+                        echo "ℹ️ No images found in ECR"
+                    fi
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            mail to: "${NOTIFY_EMAIL}",
+                 subject: "🧹 Cleanup #${BUILD_NUMBER} Complete",
+                 body: "App cleanup successful!\n\nDeleted:\n- K8s Deployment\n- K8s Service (LoadBalancer)\n- Namespace ${K8S_NAMESPACE}\n- ECR Images\n\nBuild: ${BUILD_URL}"
+        }
+        failure {
+            mail to: "${NOTIFY_EMAIL}",
+                 subject: "❌ Cleanup #${BUILD_NUMBER} Failed",
+                 body: "Cleanup failed! Check: ${BUILD_URL}"
+        }
+    }
+}

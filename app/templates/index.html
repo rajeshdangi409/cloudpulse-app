@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CloudPulse</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f172a;
+      color: #f1f5f9;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 48px 56px;
+      text-align: center;
+      max-width: 480px;
+      width: 90%;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    }
+    .badge {
+      background: #22c55e22;
+      color: #22c55e;
+      border: 1px solid #22c55e44;
+      border-radius: 999px;
+      padding: 4px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      display: inline-block;
+      margin-bottom: 20px;
+    }
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: #f8fafc;
+    }
+    h1 span { color: #38bdf8; }
+    .version {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 16px 24px;
+      margin: 24px 0;
+      font-size: 0.9rem;
+      color: #94a3b8;
+    }
+    .version strong {
+      color: #38bdf8;
+      font-size: 1.4rem;
+      display: block;
+      margin-bottom: 4px;
+    }
+    .pipeline {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      font-size: 11px;
+      color: #64748b;
+      margin-top: 24px;
+    }
+    .step {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 4px 10px;
+      color: #94a3b8;
+    }
+    .arrow { color: #334155; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">&#x2713; Live on AWS EKS</div>
+    <h1>Cloud<span>Pulse</span></h1>
+    <p style="color:#64748b; margin-top:4px; font-size:0.95rem;">DevOps CI/CD Demo Project</p>
+    <div class="version">
+      <strong>v{{ version }}</strong>
+      Deployed via Jenkins Pipeline
+    </div>
+    <div class="pipeline">
+      <span class="step">GitHub</span>
+      <span class="arrow">&#8594;</span>
+      <span class="step">Jenkins</span>
+      <span class="arrow">&#8594;</span>
+      <span class="step">Docker</span>
+      <span class="arrow">&#8594;</span>
+      <span class="step">ECR</span>
+      <span class="arrow">&#8594;</span>
+      <span class="step">EKS</span>
+    </div>
+  </div>
+</body>
+</html>

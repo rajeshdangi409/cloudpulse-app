@@ -1,0 +1,123 @@
+pipeline {
+    agent any
+
+    environment {
+        // ---- Central config (change here, applies everywhere) ----
+        AWS_REGION    = 'ap-south-1'
+        // Secrets pulled from Jenkins Credentials (Secret text), not hardcoded
+        AWS_ACCOUNT   = credentials('aws-account-id')
+        APP_NAME      = 'cloudpulse-app'
+        K8S_NAMESPACE = 'cloudpulse'
+        CLUSTER_NAME  = 'cloudpulse-cluster'
+        GIT_REPO      = 'https://github.com/rajeshdangi409/cloudpulse-app.git'
+        NOTIFY_EMAIL  = credentials('notify-email')
+
+        // ---- GitOps config (Flux deploys; we only commit the new tag) ----
+        GITHUB_OWNER  = 'rajeshdangi409'
+        GITHUB_REPO   = 'cloudpulse-app'
+
+        // ---- Security scan (Trivy) tunables ----
+        TRIVY_SEVERITY       = 'HIGH,CRITICAL'  // which severities to report
+        TRIVY_IGNORE_UNFIXED = 'true'           // hide CVEs that have no fix yet
+        TRIVY_EXIT_CODE      = '0'              // 0 = report-only; set 1 to fail build on findings
+
+        // ---- Derived values ----
+        ECR_REPO  = "${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/${APP_NAME}"
+        IMAGE_TAG = "${BUILD_NUMBER}"
+    }
+
+    triggers {
+        githubPush()
+    }
+
+    options {
+        ansiColor('xterm')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'main', url: "${GIT_REPO}"
+            }
+        }
+
+        stage('Lint & Test') {
+            steps {
+                dir('app') {
+                    sh 'pip3 install -r requirements.txt'
+                    sh 'pip3 install -r requirements-dev.txt -q'
+                    sh 'python3 -m flake8 main.py --max-line-length=120'
+                    sh 'python3 -m pytest -v'
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir('app') {
+                    sh "docker build --no-cache -t ${ECR_REPO}:${IMAGE_TAG} ."
+                }
+            }
+        }
+
+        stage('Security Scan (Trivy)') {
+            // Scan the freshly built image for OS/library vulnerabilities
+            // BEFORE it is pushed to ECR. Report-only by default (TRIVY_EXIT_CODE=0);
+            // flip TRIVY_EXIT_CODE to 1 to make findings fail the build.
+            steps {
+                sh """
+                    trivy image \
+                      --severity ${TRIVY_SEVERITY} \
+                      --ignore-unfixed=${TRIVY_IGNORE_UNFIXED} \
+                      --exit-code ${TRIVY_EXIT_CODE} \
+                      --no-progress \
+                      ${ECR_REPO}:${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                sh """
+                    aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REPO}
+                    docker push ${ECR_REPO}:${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Update Image Tag in Git') {
+            // GitOps: we do NOT run kubectl apply here. We only bump the image
+            // tag in k8s/deployment.yaml and push it to Git. Flux (running
+            // inside the cluster) detects the commit and deploys automatically.
+            environment {
+                GITHUB_TOKEN = credentials('github-token')
+            }
+            steps {
+                sh '''
+                    # Write the new image tag into the manifest
+                    sed -i "s|${APP_NAME}:[0-9]*|${APP_NAME}:${IMAGE_TAG}|g" k8s/deployment.yaml
+
+                    # Commit and push the change — this is the deploy trigger
+                    git config user.email "ci@cloudpulse.local"
+                    git config user.name "jenkins-ci"
+                    git add k8s/deployment.yaml
+                    git commit -m "Deploy build ${IMAGE_TAG}" || echo "No changes to commit"
+                    git push https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git HEAD:main
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            mail to: "${NOTIFY_EMAIL}",
+                 subject: "✅ Build #${BUILD_NUMBER} Success",
+                 body: "Deployment successful! Image: ${ECR_REPO}:${IMAGE_TAG}"
+        }
+        failure {
+            mail to: "${NOTIFY_EMAIL}",
+                 subject: "❌ Build #${BUILD_NUMBER} Failed",
+                 body: "Pipeline failed. Check: ${BUILD_URL}"
+        }
+    }
+}

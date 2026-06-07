@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudpulse-app
+  namespace: cloudpulse
+  labels:
+    app.kubernetes.io/name: cloudpulse-app
+    app.kubernetes.io/instance: cloudpulse-app
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: cloudpulse
+    app.kubernetes.io/managed-by: flux
+spec:
+  type: LoadBalancer
+  selector:
+    # Must match the Deployment's pod selector labels
+    app.kubernetes.io/name: cloudpulse-app
+    app.kubernetes.io/instance: cloudpulse-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 5000
+      protocol: TCP

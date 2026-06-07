@@ -1,0 +1,12 @@
+*.pyc
+__pycache__/
+.venv/
+*.log
+.DS_Store
+.env
+
+# Test and dev-only files (keep the production image small)
+test_*.py
+*_test.py
+.pytest_cache/
+requirements-dev.txt
