@@ -2,37 +2,48 @@
 
 > **App repo** — a Flask web app that is built, tested, containerized, and deployed to AWS EKS through a fully automated Jenkins pipeline.
 
-This repository holds the application code, its Kubernetes manifests, and the Jenkins pipeline that ships it. It is the last piece of a **4-repo** project.
+This repository holds the application code and the Jenkins pipeline that ships it.
+The Kubernetes manifests live in a **separate `cloudpulse-config` repo** (see below).
+It is the last code piece of a **5-repo** project.
 
 ---
 
-## The 4 Repositories
+## The 5 Repositories
 
 ```
 Phase 1 → cloudpulse-bootstrap   → Creates Jenkins + Ansible EC2   [Terraform, run locally]
 Phase 2 → cloudpulse-ansible     → Configures the Jenkins server    [Ansible, from Ansible server]
 Phase 3 → cloudpulse-infra       → Creates VPC + EKS + ECR          [Terraform via Jenkins]
-Phase 4 → cloudpulse-app         → Builds & deploys the app (THIS)  [Jenkins, on every git push]
+Phase 4 → cloudpulse-app         → Builds, tests, pushes to ECR     [Jenkins, on every push] (THIS)
+            └─ commits new image tag to ▼
+          cloudpulse-config       → K8s manifests; Flux deploys it  [GitOps target — no webhook]
 ```
+
+> **Why a separate config repo?** The app pipeline commits the new image tag to
+> `cloudpulse-config`, which has **no Jenkins webhook**. If that commit went back
+> into `cloudpulse-app` it would re-trigger the build — an infinite loop. Splitting
+> the manifests out breaks that loop cleanly.
 
 ---
 
 ## What Happens When I Push Code?
 
 ```
-git push → GitHub Webhook → Jenkins → Lint & Test → Docker Build → ECR Push
-                                                                      │
-                                       commit new image tag to Git ◄──┘
+git push (app code) → Webhook → Jenkins → Lint & Test → Docker Build → ECR Push
+                                                                            │
+                       commit new image tag to cloudpulse-config repo ◄────┘
                                                   │
                                                   ▼
                                   FluxCD (inside the cluster) sees the
-                                  commit → deploys to EKS automatically ✅
+                                  config-repo commit → deploys to EKS ✅
 ```
 
 Every push to `main` auto-triggers the pipeline via a GitHub webhook. This is a
 **GitOps / pull-based** flow: Jenkins never runs `kubectl apply` — it only
-commits the new image tag to Git, and **Flux** (running inside the cluster)
-detects the change and deploys it.
+commits the new image tag to the **separate `cloudpulse-config` repo**, and
+**Flux** (running inside the cluster) detects the change and deploys it. Because
+the tag commit lands in `cloudpulse-config` (which has no webhook), it never
+re-triggers this build — so there is **no CI loop**.
 
 ---
 
@@ -64,17 +75,16 @@ cloudpulse-app/
 │   ├── .dockerignore           # Excludes tests/dev files from the image
 │   └── templates/
 │       └── index.html
-├── k8s/
-│   ├── namespace.yaml          # cloudpulse namespace
-│   ├── deployment.yaml         # 2 replicas, rolling update, probes, standard labels
-│   ├── service.yaml            # LoadBalancer
-│   └── kustomization.yaml      # Apply order for Flux/kubectl (namespace→deploy→service)
 ├── jenkins/
-│   ├── Jenkinsfile             # Lint & Test → Build → Push ECR → Commit tag to Git
-│   └── Jenkinsfile.cleanup     # Separate job — Flux uninstall + delete K8s + ECR images
+│   ├── Jenkinsfile             # Lint & Test → Build → Push ECR → Commit tag to config repo
+│   └── Jenkinsfile.cleanup     # Separate job — Flux uninstall + delete namespace + ECR images
 ├── .gitignore
 └── README.md
 ```
+
+> The Kubernetes manifests (`namespace.yaml`, `deployment.yaml`, `service.yaml`,
+> `kustomization.yaml`) now live in the **`cloudpulse-config`** repo — that is the
+> repo Flux watches and deploys from.
 
 ---
 
@@ -86,7 +96,7 @@ cloudpulse-app/
 | Lint & Test | `flake8` + `pytest` (build stops if a test fails) |
 | Build Docker Image | `docker build` tagged with the build number |
 | Push to ECR | Authenticates and pushes the image to ECR |
-| Update Image Tag in Git | Bumps the tag in `k8s/deployment.yaml` and **git push** — Flux deploys it |
+| Update Image Tag (Config Repo) | Clones `cloudpulse-config`, bumps the tag in its `k8s/deployment.yaml`, and **git push** — Flux deploys it |
 | Email | Success/failure notification |
 
 All repeated values (region, account, cluster, namespace, app name, email) live
@@ -94,8 +104,9 @@ in a single `environment {}` block at the top — no values are hardcoded inside
 the stages.
 
 > **GitOps:** the pipeline does **not** run `kubectl apply`. It only commits the
-> new image tag to Git; Flux (inside the cluster) does the actual deploy. The
-> git push uses a Jenkins **`github-token`** credential (Secret text, `repo` scope).
+> new image tag to the **`cloudpulse-config`** repo; Flux (inside the cluster)
+> does the actual deploy. The git push uses a Jenkins **`github-token`**
+> credential (Secret text, `repo` scope).
 
 > A separate **cleanup** job (`jenkins/Jenkinsfile.cleanup`) uninstalls Flux
 > (so it can't self-heal the app back), then deletes the K8s resources and ECR
@@ -113,8 +124,8 @@ the stages.
 
 The version shown in the browser comes from `main.py` (currently `4.0`).
 To release a new version: edit the version in `main.py` → `git push` → the
-pipeline rebuilds, pushes to ECR, and commits the new tag to Git → Flux deploys
-it → the browser shows the new version.
+pipeline rebuilds, pushes to ECR, and commits the new tag to the `cloudpulse-config`
+repo → Flux deploys it → the browser shows the new version.
 
 ### Tests
 ```bash
@@ -127,8 +138,8 @@ pytest -v        # 5 tests covering / and /health
 
 ## Kubernetes Labels
 
-All manifests use the **recommended** `app.kubernetes.io/*` labels so each
-resource's role is explicit:
+All manifests (in the **`cloudpulse-config`** repo) use the **recommended**
+`app.kubernetes.io/*` labels so each resource's role is explicit:
 
 ```yaml
 app.kubernetes.io/name: cloudpulse-app
@@ -180,11 +191,11 @@ kubectl get svc -n cloudpulse
 This project uses **FluxCD** for deployments — a **pull-based / GitOps** model:
 
 ```
-Jenkins builds + pushes to ECR → commits new tag to Git
+Jenkins builds + pushes to ECR → commits new tag to cloudpulse-config
                                          │
                                          ▼
-              Flux (inside EKS) watches the repo's k8s/ folder
-              every ~1 min → applies any change automatically
+              Flux (inside EKS) watches the cloudpulse-config repo's
+              k8s/ folder every ~1 min → applies any change automatically
 ```
 
 **Why GitOps?**
@@ -193,11 +204,13 @@ Jenkins builds + pushes to ECR → commits new tag to Git
   back to the Git-declared state.
 - Jenkins no longer needs cluster-admin access — it only pushes to ECR and
   commits to Git.
+- **No CI loop** — the manifests live in a config repo with no webhook, so the
+  image-tag commit never re-triggers the app build.
 
 **How Flux gets there:** the `cloudpulse-infra` create pipeline runs
 `flux bootstrap` once after the EKS cluster is created. That command installs
 Flux into the cluster and auto-commits the `GitRepository` + `Kustomization`
-manifests into this repo under `k8s/flux-system/`.
+manifests into the **`cloudpulse-config`** repo under `k8s/flux-system/`.
 
 > The full design rationale (push vs pull, alternatives considered) is documented
 > in [`docs/FLUXCD_PLAN.md`](../docs/FLUXCD_PLAN.md).

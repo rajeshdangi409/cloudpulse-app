@@ -40,12 +40,11 @@ pipeline {
                     #    recreates the app right after we delete it.
                     flux uninstall --silent || true
 
-                    # 2. Delete the app (Deployment, Service/LoadBalancer, Namespace)
-                    kubectl delete -f k8s/namespace.yaml --ignore-not-found=true
-                    kubectl delete -f k8s/service.yaml --ignore-not-found=true
-                    kubectl delete -f k8s/deployment.yaml --ignore-not-found=true
-                    
-                    
+                    # 2. Delete the app by namespace. The manifests now live in the
+                    #    separate cloudpulse-config repo (not here), so we delete by
+                    #    namespace — this also tears down the Service / LoadBalancer
+                    #    that lives inside it.
+                    kubectl delete namespace ${K8S_NAMESPACE} --ignore-not-found=true
                 """
             }
         }

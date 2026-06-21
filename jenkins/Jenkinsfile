@@ -12,9 +12,9 @@ pipeline {
         GIT_REPO      = 'https://github.com/rajeshdangi409/cloudpulse-app.git'
         NOTIFY_EMAIL  = credentials('notify-email')
 
-        // ---- GitOps config (Flux deploys; we only commit the new tag) ----
+        // ---- GitOps config (Flux deploys from the separate config repo) ----
         GITHUB_OWNER  = 'rajeshdangi409'
-        GITHUB_REPO   = 'cloudpulse-app'
+        CONFIG_REPO   = 'cloudpulse-config'   // k8s manifests live here (no webhook = no build loop)
 
         // ---- Security scan (Trivy) tunables ----
         TRIVY_SEVERITY       = 'HIGH,CRITICAL'  // which severities to report
@@ -85,24 +85,33 @@ pipeline {
             }
         }
 
-        stage('Update Image Tag in Git') {
-            // GitOps: we do NOT run kubectl apply here. We only bump the image
-            // tag in k8s/deployment.yaml and push it to Git. Flux (running
-            // inside the cluster) detects the commit and deploys automatically.
+        stage('Update Image Tag (Config Repo)') {
+            // GitOps: we do NOT run kubectl apply here. We clone the SEPARATE
+            // cloudpulse-config repo, bump the image tag in k8s/deployment.yaml,
+            // and push it there. Flux (running inside the cluster) watches the
+            // config repo and deploys automatically.
+            //
+            // Why a separate repo? The config repo has NO Jenkins webhook, so this
+            // commit cannot re-trigger the app build — it breaks the self-trigger loop.
             environment {
                 GITHUB_TOKEN = credentials('github-token')
             }
             steps {
                 sh '''
+                    # Clone the config repo fresh
+                    rm -rf config-repo
+                    git clone https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${CONFIG_REPO}.git config-repo
+                    cd config-repo
+
                     # Write the new image tag into the manifest
                     sed -i "s|${APP_NAME}:[0-9]*|${APP_NAME}:${IMAGE_TAG}|g" k8s/deployment.yaml
 
-                    # Commit and push the change — this is the deploy trigger
+                    # Commit and push the change — Flux picks this up and deploys
                     git config user.email "ci@cloudpulse.local"
                     git config user.name "jenkins-ci"
                     git add k8s/deployment.yaml
                     git commit -m "Deploy build ${IMAGE_TAG}" || echo "No changes to commit"
-                    git push https://${GITHUB_TOKEN}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git HEAD:main
+                    git push origin HEAD:main
                 '''
             }
         }
